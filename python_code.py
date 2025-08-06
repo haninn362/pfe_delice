@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit as st 
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -67,7 +67,7 @@ def recommander_approvisionnement(kpis, couverture_jours=30):
     return kpis[["Article", "Stock_Actuel", "Stock_Cible", "Approvisionnement_Recommande"]]
 
 # Interface Streamlit
-st.title("📦 Tableau de Bord - Suivi des Articles")
+st.title("Tableau de Bord - Suivi des Articles")
 
 reception_df, consommation_df = charger_donnees()
 flux_df = construire_flux(reception_df, consommation_df)
@@ -76,14 +76,14 @@ articles = sorted(flux_df['Article'].unique())
 article_choisi = st.selectbox("Sélectionnez un code article :", articles)
 
 if article_choisi:
-    st.subheader("📈 Graphique de flux")
+    st.subheader("Graphique de flux")
     fig = afficher_graphique(flux_df, article_choisi)
     st.pyplot(fig)
 
-    st.subheader("📊 Indicateurs de Performance (KPI)")
+    st.subheader("Indicateurs de Performance (KPI)")
     kpis = calculer_kpis(flux_df)
     st.dataframe(kpis)
 
-    st.subheader("📦 Recommandation d’Approvisionnement (30 jours de couverture)")
+    st.subheader("Recommandation d’Approvisionnement (30 jours de couverture)")
     recommandation = recommander_approvisionnement(kpis, 30)
     st.dataframe(recommandation)
