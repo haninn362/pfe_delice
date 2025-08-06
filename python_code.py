@@ -96,7 +96,8 @@ def add_background_image(local_image_path):
     css = f"""
     <style>
     .stApp {{
-        background-image: url("data:image/jpg;base64,{encoded_string}");
+        background: linear-gradient(rgba(255,255,255,0.7), rgba(255,255,255,0.7)), 
+                    url("data:image/jpg;base64,{encoded_string}");
         background-size: cover;
         background-position: center;
         background-repeat: no-repeat;
@@ -105,5 +106,6 @@ def add_background_image(local_image_path):
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
+
 add_background_image("background.jpg")
 
