@@ -1,6 +1,7 @@
 import streamlit as st 
 import pandas as pd
 import matplotlib.pyplot as plt
+import base64
 
 @st.cache_data
 def charger_donnees():
@@ -87,3 +88,22 @@ if article_choisi:
     st.subheader("Recommandation d’Approvisionnement (30 jours de couverture)")
     recommandation = recommander_approvisionnement(kpis, 30)
     st.dataframe(recommandation)
+
+
+def add_background_image(local_image_path):
+    with open(local_image_path, "rb") as image_file:
+        encoded_string = base64.b64encode(image_file.read()).decode()
+    css = f"""
+    <style>
+    .stApp {{
+        background-image: url("data:image/jpg;base64,{encoded_string}");
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
+    }}
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+add_background_image("background.jpg")
+
