@@ -35,5 +35,3 @@ for df in [reception_df, consommation_df]:
 
 # Maintenant, vous pouvez continuer avec :
 flux_df = construire_flux(reception_df, consommation_df)
-
-
