@@ -1,5 +1,5 @@
-import io
 import base64
+import io
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
@@ -7,7 +7,16 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="Tableau de Bord - Suivi des Articles", layout="wide")
 st.title("Tableau de Bord - Suivi des Articles")
 
-# ---------------------- Utilitaires lecture ----------------------
+# -------- Helpers: sheet/column detection --------
+SYNONYMS = {
+    "date": {"date", "jour", "day", "date reception", "date consommation", "date de reception",
+             "date de consommation", "date_entree", "date_sortie"},
+    "article": {"article", "code", "code article", "sku", "item", "produit", "reference", "référence",
+                "designation", "libelle", "libellé"},
+    "qty": {"qty", "quantity", "quantite", "quantité", "qte", "qté", "qte recu", "qte reçue",
+            "qte consommee", "qte consommée", "entree", "sortie", "input", "output"},
+}
+
 def _excel_engine_for(name: str) -> str | None:
     name = name.lower()
     if name.endswith(".xlsb"):
@@ -16,21 +25,113 @@ def _excel_engine_for(name: str) -> str | None:
         return "openpyxl"
     return None
 
-def read_excel_sheet(uploaded_file, sheet_name):
+def _best_match(colnames, kind):
+    """Return the best matching column name for a semantic kind (date/article/qty)."""
+    lower = {c.lower(): c for c in colnames}
+    for cand in lower:
+        if cand.strip() in SYNONYMS[kind]:
+            return lower[cand]
+    # relaxed contains search
+    for cand in lower:
+        for token in SYNONYMS[kind]:
+            if token in cand:
+                return lower[cand]
+    return None
+
+def _read_sheet(uploaded_file, sheet_name):
     engine = _excel_engine_for(uploaded_file.name)
     return pd.read_excel(uploaded_file, sheet_name=sheet_name, engine=engine)
 
-# ---------------------- Construction des données ----------------------
-def construire_flux(reception: pd.DataFrame, consommation: pd.DataFrame) -> pd.DataFrame:
-    # Nettoyage et typage
-    for df in (reception, consommation):
-        if "Date" in df.columns:
-            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        if "Quantity" in df.columns:
-            df["Quantity"] = pd.to_numeric(df["Quantity"], errors="coerce")
-    reception = reception.dropna(subset=["Date", "Article", "Quantity"])
-    consommation = consommation.dropna(subset=["Date", "Article", "Quantity"])
+# -------- Upload one Excel file, choose two sheets --------
+uploaded_file = st.file_uploader(
+    "Importer un fichier Excel contenant deux feuilles (Réception et Consommation)",
+    type=["xlsx", "xls", "xlsb"]
+)
 
+if not uploaded_file:
+    st.info("Importez le fichier Excel pour continuer.")
+    st.stop()
+
+try:
+    xls = pd.ExcelFile(uploaded_file, engine=_excel_engine_for(uploaded_file.name))
+    sheets = xls.sheet_names
+except Exception as e:
+    st.error(f"Impossible de lire le fichier: {e}")
+    st.stop()
+
+st.write("Feuilles détectées:", ", ".join(sheets))
+
+# Heuristic preselect: try to guess which sheet is reception vs consumption by name
+def _guess_sheet(role):
+    # role in {"reception","consommation"}
+    targets = ["reception", "réception"] if role == "reception" else ["consommation", "consumption"]
+    for i, s in enumerate(sheets):
+        sl = s.lower()
+        if any(t in sl for t in targets):
+            return i
+    return 0 if role == "reception" else (1 if len(sheets) > 1 else 0)
+
+sheet_rec = st.selectbox("Feuille Réception", options=sheets, index=_guess_sheet("reception"))
+sheet_conso = st.selectbox("Feuille Consommation", options=sheets, index=_guess_sheet("consommation"))
+
+try:
+    rec_raw = _read_sheet(uploaded_file, sheet_rec)
+    conso_raw = _read_sheet(uploaded_file, sheet_conso)
+except Exception as e:
+    st.error(f"Erreur de lecture des feuilles: {e}")
+    st.stop()
+
+with st.expander("Aperçu Réception (10 premières lignes)"):
+    st.dataframe(rec_raw.head(10), use_container_width=True)
+with st.expander("Aperçu Consommation (10 premières lignes)"):
+    st.dataframe(conso_raw.head(10), use_container_width=True)
+
+# -------- Column mapping with autodetect and manual override --------
+def mapping_ui(df, label):
+    cols = list(df.columns)
+    guess_date = _best_match(cols, "date") or "(aucune)"
+    guess_art = _best_match(cols, "article") or "(aucune)"
+    guess_qty = _best_match(cols, "qty") or "(aucune)"
+    choices = ["(aucune)"] + cols
+    st.caption(f"Associer les colonnes pour {label}")
+    m_date = st.selectbox("Colonne Date", choices, index=choices.index(guess_date) if guess_date in choices else 0, key=f"{label}_date")
+    m_art = st.selectbox("Colonne Article", choices, index=choices.index(guess_art) if guess_art in choices else 0, key=f"{label}_article")
+    m_qty = st.selectbox("Colonne Quantité", choices, index=choices.index(guess_qty) if guess_qty in choices else 0, key=f"{label}_qty")
+    return {"Date": m_date, "Article": m_art, "Quantity": m_qty}
+
+st.subheader("Associer les colonnes")
+c1, c2 = st.columns(2)
+with c1:
+    map_rec = mapping_ui(rec_raw, "Réception")
+with c2:
+    map_conso = mapping_ui(conso_raw, "Consommation")
+
+if "(aucune)" in map_rec.values() or "(aucune)" in map_conso.values():
+    st.warning("Veuillez mapper Date, Article et Quantité pour les deux feuilles.")
+    st.stop()
+
+@st.cache_data(show_spinner=False)
+def normalize_frames(rec_raw, conso_raw, map_rec, map_conso):
+    rec = rec_raw.rename(columns={
+        map_rec["Date"]: "Date", map_rec["Article"]: "Article", map_rec["Quantity"]: "Quantity"
+    })[["Date", "Article", "Quantity"]].copy()
+    con = conso_raw.rename(columns={
+        map_conso["Date"]: "Date", map_conso["Article"]: "Article", map_conso["Quantity"]: "Quantity"
+    })[["Date", "Article", "Quantity"]].copy()
+
+    rec["Date"] = pd.to_datetime(rec["Date"], errors="coerce")
+    con["Date"] = pd.to_datetime(con["Date"], errors="coerce")
+    rec["Quantity"] = pd.to_numeric(rec["Quantity"], errors="coerce")
+    con["Quantity"] = pd.to_numeric(con["Quantity"], errors="coerce")
+
+    rec = rec.dropna(subset=["Date", "Article", "Quantity"])
+    con = con.dropna(subset=["Date", "Article", "Quantity"])
+    return rec, con
+
+reception_df, consommation_df = normalize_frames(rec_raw, conso_raw, map_rec, map_conso)
+
+# -------- Business logic --------
+def construire_flux(reception, consommation):
     reception = reception.sort_values(["Article", "Date"])
     consommation = consommation.sort_values(["Article", "Date"])
 
@@ -43,19 +144,14 @@ def construire_flux(reception: pd.DataFrame, consommation: pd.DataFrame) -> pd.D
         .agg(Quantite_Consommee=("Quantity", "sum"))
     )
 
-    flux = (
-        pd.merge(reception_agg, consommation_agg, on=["Date", "Article"], how="outer")
-        .sort_values(["Article", "Date"])
-    )
-
-    flux["Quantite_Recue"] = flux["Quantite_Recue"].fillna(0)
-    flux["Quantite_Consommee"] = flux["Quantite_Consommee"].fillna(0)
+    flux = pd.merge(reception_agg, consommation_agg, on=["Date", "Article"], how="outer")
+    flux = flux.sort_values(["Article", "Date"]).fillna({"Quantite_Recue": 0, "Quantite_Consommee": 0})
     flux["Cumul_Recu"] = flux.groupby("Article")["Quantite_Recue"].cumsum()
     flux["Cumul_Consomme"] = flux.groupby("Article")["Quantite_Consommee"].cumsum()
     flux["Stock_Courant"] = flux["Cumul_Recu"] - flux["Cumul_Consomme"]
     return flux
 
-def afficher_graphique(flux: pd.DataFrame, article: str):
+def afficher_graphique(flux, article):
     data = flux[flux["Article"] == article]
     if data.empty:
         st.warning("Aucune donnée pour cet article.")
@@ -71,30 +167,24 @@ def afficher_graphique(flux: pd.DataFrame, article: str):
     ax.grid(True)
     return fig
 
-def calculer_kpis(flux: pd.DataFrame) -> pd.DataFrame:
+def calculer_kpis(flux):
     if flux.empty:
         return pd.DataFrame(columns=[
             "Article","Quantite_Recue_Totale","Quantite_Consommee_Totale",
             "Taux_Rotation","Conso_Moyenne_Journaliere","Stock_Actuel","Jours_Couverture"
         ])
-
     kpi = (
         flux.groupby("Article", as_index=False)
         .agg(
             Quantite_Recue_Totale=("Quantite_Recue", "sum"),
-            Quantite_Consommee_Totale=("Quantite_Consommee", "sum")
+            Quantite_Consommee_Totale=("Quantite_Consommee", "sum"),
         )
     )
-
     if flux["Date"].notna().any():
-        jours = int((flux["Date"].max() - flux["Date"].min()).days) + 1
-        jours = max(jours, 1)
+        jours = max(int((flux["Date"].max() - flux["Date"].min()).days) + 1, 1)
     else:
         jours = 1
-
-    kpi["Taux_Rotation"] = (
-        kpi["Quantite_Consommee_Totale"] / kpi["Quantite_Recue_Totale"].replace(0, pd.NA)
-    )
+    kpi["Taux_Rotation"] = kpi["Quantite_Consommee_Totale"] / kpi["Quantite_Recue_Totale"].replace(0, pd.NA)
     kpi["Conso_Moyenne_Journaliere"] = kpi["Quantite_Consommee_Totale"] / jours
 
     stock_actuel = (
@@ -104,58 +194,18 @@ def calculer_kpis(flux: pd.DataFrame) -> pd.DataFrame:
             .rename(columns={"Stock_Courant": "Stock_Actuel"})
     )
     kpi = kpi.merge(stock_actuel, on="Article", how="left")
-    kpi["Jours_Couverture"] = (
-        kpi["Stock_Actuel"] / kpi["Conso_Moyenne_Journaliere"].replace(0, pd.NA)
-    )
+    kpi["Jours_Couverture"] = kpi["Stock_Actuel"] / kpi["Conso_Moyenne_Journaliere"].replace(0, pd.NA)
     return kpi
 
-def recommander_approvisionnement(kpis: pd.DataFrame, couverture_jours=30) -> pd.DataFrame:
+def recommander_approvisionnement(kpis, couverture_jours=30):
     if kpis.empty:
         return kpis
     kpis = kpis.copy()
     kpis["Stock_Cible"] = kpis["Conso_Moyenne_Journaliere"] * couverture_jours
-    kpis["Approvisionnement_Recommande"] = (
-        kpis["Stock_Cible"] - kpis["Stock_Actuel"]
-    ).clip(lower=0)
+    kpis["Approvisionnement_Recommande"] = (kpis["Stock_Cible"] - kpis["Stock_Actuel"]).clip(lower=0)
     return kpis[["Article", "Stock_Actuel", "Stock_Cible", "Approvisionnement_Recommande"]]
 
-# ---------------------- UI: un fichier, deux feuilles ----------------------
-uploaded_file = st.file_uploader(
-    "Importez un fichier Excel contenant deux feuilles: Réception et Consommation",
-    type=["xlsx", "xls", "xlsb"]
-)
-
-if not uploaded_file:
-    st.info("Importez le fichier Excel pour continuer.")
-    st.stop()
-
-try:
-    xls = pd.ExcelFile(uploaded_file, engine=_excel_engine_for(uploaded_file.name))
-    sheets = xls.sheet_names
-    st.write("Feuilles détectées :", sheets)
-
-    sheet_rec = st.selectbox("Feuille Réception", options=sheets, index=0)
-    sheet_conso = st.selectbox("Feuille Consommation", options=sheets, index=1 if len(sheets) > 1 else 0)
-
-    reception_df = read_excel_sheet(uploaded_file, sheet_rec)
-    consommation_df = read_excel_sheet(uploaded_file, sheet_conso)
-except Exception as e:
-    st.error(f"Erreur de lecture du fichier Excel: {e}")
-    st.stop()
-
-# Validation minimale des colonnes attendues
-required_cols = {"Date", "Article", "Quantity"}
-missing_rec = required_cols - set(reception_df.columns)
-missing_con = required_cols - set(consommation_df.columns)
-if missing_rec or missing_con:
-    st.error(
-        "Colonnes attendues: Date, Article, Quantity. "
-        f"Manquantes dans Réception: {sorted(missing_rec)}; "
-        f"Manquantes dans Consommation: {sorted(missing_con)}"
-    )
-    st.stop()
-
-# ---------------------- Calculs et affichages ----------------------
+# -------- Compute and display --------
 flux_df = construire_flux(reception_df, consommation_df)
 
 articles = sorted(flux_df["Article"].dropna().unique())
@@ -167,7 +217,7 @@ if article_choisi and article_choisi != "(Tous)":
     if fig:
         st.pyplot(fig)
 else:
-    st.caption("Sélectionnez un article pour afficher le graphique détaillé.")
+    st.caption("Sélectionnez un article pour afficher le graphique.")
 
 st.subheader("Indicateurs de Performance (KPI)")
 kpis = calculer_kpis(flux_df)
@@ -177,7 +227,7 @@ st.subheader("Recommandation d’Approvisionnement (30 jours de couverture)")
 recommandation = recommander_approvisionnement(kpis, 30)
 st.dataframe(recommandation, use_container_width=True)
 
-# ---------------------- Fond d'écran optionnel ----------------------
+# -------- Optional background --------
 def add_background_image(local_image_path):
     try:
         with open(local_image_path, "rb") as image_file:
