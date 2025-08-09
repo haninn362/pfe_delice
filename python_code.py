@@ -1,5 +1,4 @@
 import base64
-import io
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
@@ -7,14 +6,22 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="Tableau de Bord - Suivi des Articles", layout="wide")
 st.title("Tableau de Bord - Suivi des Articles")
 
-# -------- Helpers: sheet/column detection --------
+# ---------------------- Helpers: sheet/column detection ----------------------
 SYNONYMS = {
-    "date": {"date", "jour", "day", "date reception", "date consommation", "date de reception",
-             "date de consommation", "date_entree", "date_sortie"},
-    "article": {"article", "code", "code article", "sku", "item", "produit", "reference", "référence",
-                "designation", "libelle", "libellé"},
-    "qty": {"qty", "quantity", "quantite", "quantité", "qte", "qté", "qte recu", "qte reçue",
-            "qte consommee", "qte consommée", "entree", "sortie", "input", "output"},
+    "date": {
+        "date", "jour", "day", "date transaction", "date bs", "date reception",
+        "date consommation", "date de reception", "date de consommation",
+        "date_entree", "date_sortie"
+    },
+    "article": {
+        "article", "code", "code article", "sku", "item", "produit",
+        "reference", "référence", "designation", "libelle", "libellé"
+    },
+    "qty": {
+        "qty", "quantity", "quantite", "quantité", "qte", "qté", "qte recu",
+        "qte reçue", "qte consommee", "qte consommée", "entree", "sortie",
+        "input", "output"
+    },
 }
 
 def _excel_engine_for(name: str) -> str | None:
@@ -26,23 +33,22 @@ def _excel_engine_for(name: str) -> str | None:
     return None
 
 def _best_match(colnames, kind):
-    """Return the best matching column name for a semantic kind (date/article/qty)."""
-    lower = {c.lower(): c for c in colnames}
-    for cand in lower:
-        if cand.strip() in SYNONYMS[kind]:
-            return lower[cand]
+    lower_map = {c.lower(): c for c in colnames}
+    # exact match on known synonyms
+    for low, original in lower_map.items():
+        if low.strip() in SYNONYMS[kind]:
+            return original
     # relaxed contains search
-    for cand in lower:
-        for token in SYNONYMS[kind]:
-            if token in cand:
-                return lower[cand]
+    for low, original in lower_map.items():
+        if any(tok in low for tok in SYNONYMS[kind]):
+            return original
     return None
 
 def _read_sheet(uploaded_file, sheet_name):
     engine = _excel_engine_for(uploaded_file.name)
     return pd.read_excel(uploaded_file, sheet_name=sheet_name, engine=engine)
 
-# -------- Upload one Excel file, choose two sheets --------
+# ---------------------- Upload: one file, two sheets ----------------------
 uploaded_file = st.file_uploader(
     "Importer un fichier Excel contenant deux feuilles (Réception et Consommation)",
     type=["xlsx", "xls", "xlsb"]
@@ -61,13 +67,10 @@ except Exception as e:
 
 st.write("Feuilles détectées:", ", ".join(sheets))
 
-# Heuristic preselect: try to guess which sheet is reception vs consumption by name
 def _guess_sheet(role):
-    # role in {"reception","consommation"}
     targets = ["reception", "réception"] if role == "reception" else ["consommation", "consumption"]
     for i, s in enumerate(sheets):
-        sl = s.lower()
-        if any(t in sl for t in targets):
+        if any(t in s.lower() for t in targets):
             return i
     return 0 if role == "reception" else (1 if len(sheets) > 1 else 0)
 
@@ -86,17 +89,17 @@ with st.expander("Aperçu Réception (10 premières lignes)"):
 with st.expander("Aperçu Consommation (10 premières lignes)"):
     st.dataframe(conso_raw.head(10), use_container_width=True)
 
-# -------- Column mapping with autodetect and manual override --------
+# ---------------------- Column mapping UI ----------------------
 def mapping_ui(df, label):
     cols = list(df.columns)
     guess_date = _best_match(cols, "date") or "(aucune)"
-    guess_art = _best_match(cols, "article") or "(aucune)"
-    guess_qty = _best_match(cols, "qty") or "(aucune)"
+    guess_art  = _best_match(cols, "article") or "(aucune)"
+    guess_qty  = _best_match(cols, "qty") or "(aucune)"
     choices = ["(aucune)"] + cols
     st.caption(f"Associer les colonnes pour {label}")
     m_date = st.selectbox("Colonne Date", choices, index=choices.index(guess_date) if guess_date in choices else 0, key=f"{label}_date")
-    m_art = st.selectbox("Colonne Article", choices, index=choices.index(guess_art) if guess_art in choices else 0, key=f"{label}_article")
-    m_qty = st.selectbox("Colonne Quantité", choices, index=choices.index(guess_qty) if guess_qty in choices else 0, key=f"{label}_qty")
+    m_art  = st.selectbox("Colonne Article", choices, index=choices.index(guess_art)  if guess_art  in choices else 0, key=f"{label}_article")
+    m_qty  = st.selectbox("Colonne Quantité", choices, index=choices.index(guess_qty) if guess_qty in choices else 0, key=f"{label}_qty")
     return {"Date": m_date, "Article": m_art, "Quantity": m_qty}
 
 st.subheader("Associer les colonnes")
@@ -130,7 +133,7 @@ def normalize_frames(rec_raw, conso_raw, map_rec, map_conso):
 
 reception_df, consommation_df = normalize_frames(rec_raw, conso_raw, map_rec, map_conso)
 
-# -------- Business logic --------
+# ---------------------- Business logic ----------------------
 def construire_flux(reception, consommation):
     reception = reception.sort_values(["Article", "Date"])
     consommation = consommation.sort_values(["Article", "Date"])
@@ -205,7 +208,7 @@ def recommander_approvisionnement(kpis, couverture_jours=30):
     kpis["Approvisionnement_Recommande"] = (kpis["Stock_Cible"] - kpis["Stock_Actuel"]).clip(lower=0)
     return kpis[["Article", "Stock_Actuel", "Stock_Cible", "Approvisionnement_Recommande"]]
 
-# -------- Compute and display --------
+# ---------------------- Compute and display ----------------------
 flux_df = construire_flux(reception_df, consommation_df)
 
 articles = sorted(flux_df["Article"].dropna().unique())
@@ -227,7 +230,7 @@ st.subheader("Recommandation d’Approvisionnement (30 jours de couverture)")
 recommandation = recommander_approvisionnement(kpis, 30)
 st.dataframe(recommandation, use_container_width=True)
 
-# -------- Optional background --------
+# ---------------------- Optional background and dark text ----------------------
 def add_background_image(local_image_path):
     try:
         with open(local_image_path, "rb") as image_file:
@@ -248,4 +251,21 @@ def add_background_image(local_image_path):
     except FileNotFoundError:
         st.caption("Ajoutez un fichier 'background.jpg' à la racine si vous souhaitez un fond personnalisé.")
 
+def darken_text():
+    css = """
+    <style>
+    /* Darken all text globally for readability over background */
+    html, body, .stApp, [class*="css"] {
+        color: #000000 !important;
+    }
+    /* Make labels and captions darker/bolder */
+    label, .stCaption, .stMarkdown p, .st-emotion-cache, .stSelectbox label {
+        color: #111111 !important;
+        font-weight: 600;
+    }
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
 add_background_image("background.jpg")
+darken_text()
