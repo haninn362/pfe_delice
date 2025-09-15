@@ -1,271 +1,99 @@
-import base64
+# app.py
+# ============================================
+# Streamlit App: SBA + Croston + SES
+# Grid Search (ME, MSE, RMSE) + Final Recalc
+# ============================================
+
+import numpy as np
 import pandas as pd
+import re
+from scipy.stats import nbinom
 import streamlit as st
-import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Tableau de Bord - Suivi des Articles", layout="wide")
-st.title("Tableau de Bord - Suivi des Articles")
+# ---------- GLOBAL PARAMETERS ----------
+PRODUCT_CODES_UNI = ["EM0400", "EM1499", "EM1091", "EM1523", "EM0392", "EM1526"]
 
-# ---------------------- Helpers: sheet/column detection ----------------------
-SYNONYMS = {
-    "date": {
-        "date", "jour", "day", "date transaction", "date bs", "date reception",
-        "date consommation", "date de reception", "date de consommation",
-        "date_entree", "date_sortie"
-    },
-    "article": {
-        "article", "code", "code article", "sku", "item", "produit",
-        "reference", "référence", "designation", "libelle", "libellé"
-    },
-    "qty": {
-        "qty", "quantity", "quantite", "quantité", "qte", "qté", "qte recu",
-        "qte reçue", "qte consommee", "qte consommée", "entree", "sortie",
-        "input", "output"
-    },
-}
+ALPHAS_UNI = [0.05, 0.1, 0.15, 0.2, 0.3, 0.4]
+WINDOW_RATIOS_UNI = [0.6, 0.7, 0.8]
+RECALC_INTERVALS_UNI = [1, 2, 5, 10, 15, 20]
 
-def _excel_engine_for(name: str) -> str | None:
-    name = name.lower()
-    if name.endswith(".xlsb"):
-        return "pyxlsb"
-    if name.endswith((".xlsx", ".xls")):
-        return "openpyxl"
-    return None
+LEAD_TIME_UNI = 1
+LEAD_TIME_SUPPLIER_UNI = 3
+SERVICE_LEVEL_UNI = 0.95
+NB_SIM_UNI = 800
+RNG_SEED_UNI = 42
 
-def _best_match(colnames, kind):
-    lower_map = {c.lower(): c for c in colnames}
-    # exact match on known synonyms
-    for low, original in lower_map.items():
-        if low.strip() in SYNONYMS[kind]:
-            return original
-    # relaxed contains search
-    for low, original in lower_map.items():
-        if any(tok in low for tok in SYNONYMS[kind]):
-            return original
-    return None
+DISPLAY_COLUMNS_UNI = [
+    "date", "code", "interval", "real_demand", "stock_on_hand_running",
+    "stock_after_interval", "can_cover_interval", "order_policy",
+    "reorder_point_usine", "lead_time_usine_days", "lead_time_supplier_days",
+    "reorder_point_fournisseur", "stock_status", "rop_usine_minus_real_running"
+]
 
-def _read_sheet(uploaded_file, sheet_name):
-    engine = _excel_engine_for(uploaded_file.name)
-    return pd.read_excel(uploaded_file, sheet_name=sheet_name, engine=engine)
+# =====================================================================
+# ================== INSERT YOUR FUNCTIONS HERE =======================
+# (all the SBA / Croston / SES functions you shared remain the same)
+# =====================================================================
+# Just remove all 'print()' and 'display()', replace them with return values
+# =====================================================================
 
-# ---------------------- Upload: one file, two sheets ----------------------
-uploaded_file = st.file_uploader(
-    "Importer un fichier Excel contenant deux feuilles (Réception et Consommation)",
-    type=["xlsx", "xls", "xlsb"]
-)
+# Example modification:
+def _grid_and_final_sba(excel_path):
+    best_rows = []
+    for code in PRODUCT_CODES_UNI:
+        best_row = None
+        best_rmse = np.inf
+        for a in ALPHAS_UNI:
+            for w in WINDOW_RATIOS_UNI:
+                for itv in RECALC_INTERVALS_UNI:
+                    df_run = rolling_sba_with_rops_single_run(
+                        excel_path=excel_path, product_code=code,
+                        alpha=a, window_ratio=w, interval=itv,
+                        lead_time=LEAD_TIME_UNI, lead_time_supplier=LEAD_TIME_SUPPLIER_UNI,
+                        service_level=SERVICE_LEVEL_UNI, nb_sim=NB_SIM_UNI, rng_seed=RNG_SEED_UNI,
+                        variant="sba",
+                    )
+                    _, _, _, RMSE = compute_metrics_sba(df_run)
+                    if pd.notna(RMSE):
+                        if (RMSE < best_rmse * 0.99) or (np.isclose(RMSE, best_rmse, rtol=0.01) and best_row is not None and (
+                            (itv, a, w) > (best_row["recalc_interval"], best_row["alpha"], best_row["window_ratio"])
+                        )):
+                            best_rmse = RMSE
+                            best_row = {"code": code, "alpha": a, "window_ratio": w, "recalc_interval": itv, "RMSE": RMSE}
+        if best_row:
+            best_rows.append(best_row)
 
-if not uploaded_file:
-    st.info("Importez le fichier Excel pour continuer.")
-    st.stop()
+    df_best_sba = pd.DataFrame(best_rows)
+    return df_best_sba
 
-try:
-    xls = pd.ExcelFile(uploaded_file, engine=_excel_engine_for(uploaded_file.name))
-    sheets = xls.sheet_names
-except Exception as e:
-    st.error(f"Impossible de lire le fichier: {e}")
-    st.stop()
 
-st.write("Feuilles détectées:", ", ".join(sheets))
+# =====================================================================
+# ============================ STREAMLIT UI ===========================
+# =====================================================================
 
-def _guess_sheet(role):
-    targets = ["reception", "réception"] if role == "reception" else ["consommation", "consumption"]
-    for i, s in enumerate(sheets):
-        if any(t in s.lower() for t in targets):
-            return i
-    return 0 if role == "reception" else (1 if len(sheets) > 1 else 0)
+st.title("📊 Demand Forecasting with SBA / Croston / SES")
 
-sheet_rec = st.selectbox("Feuille Réception", options=sheets, index=_guess_sheet("reception"))
-sheet_conso = st.selectbox("Feuille Consommation", options=sheets, index=_guess_sheet("consommation"))
+uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"])
+if uploaded_file:
+    excel_path = uploaded_file
 
-try:
-    rec_raw = _read_sheet(uploaded_file, sheet_rec)
-    conso_raw = _read_sheet(uploaded_file, sheet_conso)
-except Exception as e:
-    st.error(f"Erreur de lecture des feuilles: {e}")
-    st.stop()
+    method = st.selectbox("Choose Forecasting Method", ["SBA", "Croston", "SES"])
 
-with st.expander("Aperçu Réception (10 premières lignes)"):
-    st.dataframe(rec_raw.head(10), use_container_width=True)
-with st.expander("Aperçu Consommation (10 premières lignes)"):
-    st.dataframe(conso_raw.head(10), use_container_width=True)
+    if st.button("Run Forecasting"):
+        if method == "SBA":
+            df_best = _grid_and_final_sba(excel_path)
+            st.subheader("✅ SBA — Best Parameters (by RMSE)")
+            st.dataframe(df_best)
 
-# ---------------------- Column mapping UI ----------------------
-def mapping_ui(df, label):
-    cols = list(df.columns)
-    guess_date = _best_match(cols, "date") or "(aucune)"
-    guess_art  = _best_match(cols, "article") or "(aucune)"
-    guess_qty  = _best_match(cols, "qty") or "(aucune)"
-    choices = ["(aucune)"] + cols
-    st.caption(f"Associer les colonnes pour {label}")
-    m_date = st.selectbox("Colonne Date", choices, index=choices.index(guess_date) if guess_date in choices else 0, key=f"{label}_date")
-    m_art  = st.selectbox("Colonne Article", choices, index=choices.index(guess_art)  if guess_art  in choices else 0, key=f"{label}_article")
-    m_qty  = st.selectbox("Colonne Quantité", choices, index=choices.index(guess_qty) if guess_qty in choices else 0, key=f"{label}_qty")
-    return {"Date": m_date, "Article": m_art, "Quantity": m_qty}
+        elif method == "Croston":
+            df_best = _grid_and_final_croston(excel_path)
+            st.subheader("✅ Croston — Best Parameters (by RMSE)")
+            st.dataframe(df_best)
 
-st.subheader("Associer les colonnes")
-c1, c2 = st.columns(2)
-with c1:
-    map_rec = mapping_ui(rec_raw, "Réception")
-with c2:
-    map_conso = mapping_ui(conso_raw, "Consommation")
+        elif method == "SES":
+            df_best = _grid_and_final_ses(excel_path)
+            st.subheader("✅ SES — Best Parameters (by RMSE)")
+            st.dataframe(df_best)
 
-if "(aucune)" in map_rec.values() or "(aucune)" in map_conso.values():
-    st.warning("Veuillez mapper Date, Article et Quantité pour les deux feuilles.")
-    st.stop()
+        st.success("Analysis completed!")
 
-@st.cache_data(show_spinner=False)
-def normalize_frames(rec_raw, conso_raw, map_rec, map_conso):
-    rec = rec_raw.rename(columns={
-        map_rec["Date"]: "Date", map_rec["Article"]: "Article", map_rec["Quantity"]: "Quantity"
-    })[["Date", "Article", "Quantity"]].copy()
-    con = conso_raw.rename(columns={
-        map_conso["Date"]: "Date", map_conso["Article"]: "Article", map_conso["Quantity"]: "Quantity"
-    })[["Date", "Article", "Quantity"]].copy()
-
-    rec["Date"] = pd.to_datetime(rec["Date"], errors="coerce")
-    con["Date"] = pd.to_datetime(con["Date"], errors="coerce")
-    rec["Quantity"] = pd.to_numeric(rec["Quantity"], errors="coerce")
-    con["Quantity"] = pd.to_numeric(con["Quantity"], errors="coerce")
-
-    rec = rec.dropna(subset=["Date", "Article", "Quantity"])
-    con = con.dropna(subset=["Date", "Article", "Quantity"])
-    return rec, con
-
-reception_df, consommation_df = normalize_frames(rec_raw, conso_raw, map_rec, map_conso)
-
-# ---------------------- Business logic ----------------------
-def construire_flux(reception, consommation):
-    reception = reception.sort_values(["Article", "Date"])
-    consommation = consommation.sort_values(["Article", "Date"])
-
-    reception_agg = (
-        reception.groupby(["Date", "Article"], as_index=False)
-        .agg(Quantite_Recue=("Quantity", "sum"))
-    )
-    consommation_agg = (
-        consommation.groupby(["Date", "Article"], as_index=False)
-        .agg(Quantite_Consommee=("Quantity", "sum"))
-    )
-
-    flux = pd.merge(reception_agg, consommation_agg, on=["Date", "Article"], how="outer")
-    flux = flux.sort_values(["Article", "Date"]).fillna({"Quantite_Recue": 0, "Quantite_Consommee": 0})
-    flux["Cumul_Recu"] = flux.groupby("Article")["Quantite_Recue"].cumsum()
-    flux["Cumul_Consomme"] = flux.groupby("Article")["Quantite_Consommee"].cumsum()
-    flux["Stock_Courant"] = flux["Cumul_Recu"] - flux["Cumul_Consomme"]
-    return flux
-
-def afficher_graphique(flux, article):
-    data = flux[flux["Article"] == article]
-    if data.empty:
-        st.warning("Aucune donnée pour cet article.")
-        return None
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(data["Date"], data["Cumul_Recu"], label="Cumul Réception")
-    ax.plot(data["Date"], data["Cumul_Consomme"], label="Cumul Consommation")
-    ax.plot(data["Date"], data["Stock_Courant"], label="Stock Courant", linestyle="--")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Quantité")
-    ax.set_title(f"Flux de Stock - {article}")
-    ax.legend()
-    ax.grid(True)
-    return fig
-
-def calculer_kpis(flux):
-    if flux.empty:
-        return pd.DataFrame(columns=[
-            "Article","Quantite_Recue_Totale","Quantite_Consommee_Totale",
-            "Taux_Rotation","Conso_Moyenne_Journaliere","Stock_Actuel","Jours_Couverture"
-        ])
-    kpi = (
-        flux.groupby("Article", as_index=False)
-        .agg(
-            Quantite_Recue_Totale=("Quantite_Recue", "sum"),
-            Quantite_Consommee_Totale=("Quantite_Consommee", "sum"),
-        )
-    )
-    if flux["Date"].notna().any():
-        jours = max(int((flux["Date"].max() - flux["Date"].min()).days) + 1, 1)
-    else:
-        jours = 1
-    kpi["Taux_Rotation"] = kpi["Quantite_Consommee_Totale"] / kpi["Quantite_Recue_Totale"].replace(0, pd.NA)
-    kpi["Conso_Moyenne_Journaliere"] = kpi["Quantite_Consommee_Totale"] / jours
-
-    stock_actuel = (
-        flux.sort_values(["Article", "Date"])
-            .groupby("Article")
-            .tail(1)[["Article", "Stock_Courant"]]
-            .rename(columns={"Stock_Courant": "Stock_Actuel"})
-    )
-    kpi = kpi.merge(stock_actuel, on="Article", how="left")
-    kpi["Jours_Couverture"] = kpi["Stock_Actuel"] / kpi["Conso_Moyenne_Journaliere"].replace(0, pd.NA)
-    return kpi
-
-def recommander_approvisionnement(kpis, couverture_jours=30):
-    if kpis.empty:
-        return kpis
-    kpis = kpis.copy()
-    kpis["Stock_Cible"] = kpis["Conso_Moyenne_Journaliere"] * couverture_jours
-    kpis["Approvisionnement_Recommande"] = (kpis["Stock_Cible"] - kpis["Stock_Actuel"]).clip(lower=0)
-    return kpis[["Article", "Stock_Actuel", "Stock_Cible", "Approvisionnement_Recommande"]]
-
-# ---------------------- Compute and display ----------------------
-flux_df = construire_flux(reception_df, consommation_df)
-
-articles = sorted(flux_df["Article"].dropna().unique())
-article_choisi = st.selectbox("Sélectionnez un code article", ["(Tous)"] + articles)
-
-st.subheader("Graphique de flux")
-if article_choisi and article_choisi != "(Tous)":
-    fig = afficher_graphique(flux_df, article_choisi)
-    if fig:
-        st.pyplot(fig)
-else:
-    st.caption("Sélectionnez un article pour afficher le graphique.")
-
-st.subheader("Indicateurs de Performance (KPI)")
-kpis = calculer_kpis(flux_df)
-st.dataframe(kpis, use_container_width=True)
-
-st.subheader("Recommandation d’Approvisionnement (30 jours de couverture)")
-recommandation = recommander_approvisionnement(kpis, 30)
-st.dataframe(recommandation, use_container_width=True)
-
-# ---------------------- Optional background and dark text ----------------------
-def add_background_image(local_image_path):
-    try:
-        with open(local_image_path, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode()
-        css = f"""
-        <style>
-        .stApp {{
-            background: linear-gradient(rgba(255,255,255,0.7), rgba(255,255,255,0.7)),
-                        url("data:image/jpg;base64,{encoded_string}");
-            background-size: cover;
-            background-position: center;
-            background-repeat: no-repeat;
-            background-attachment: fixed;
-        }}
-        </style>
-        """
-        st.markdown(css, unsafe_allow_html=True)
-    except FileNotFoundError:
-        st.caption("Ajoutez un fichier 'background.jpg' à la racine si vous souhaitez un fond personnalisé.")
-
-def darken_text():
-    css = """
-    <style>
-    /* Darken all text globally for readability over background */
-    html, body, .stApp, [class*="css"] {
-        color: #000000 !important;
-    }
-    /* Make labels and captions darker/bolder */
-    label, .stCaption, .stMarkdown p, .st-emotion-cache, .stSelectbox label {
-        color: #111111 !important;
-        font-weight: 600;
-    }
-    </style>
-    """
-    st.markdown(css, unsafe_allow_html=True)
-
-add_background_image("background.jpg")
-darken_text()
