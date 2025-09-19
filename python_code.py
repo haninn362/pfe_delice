@@ -1,5 +1,5 @@
 # ============================================
-# FINAL MERGED STREAMLIT APP
+# FINAL UNIFIED STREAMLIT APP (Single Upload)
 # ============================================
 
 import io
@@ -9,27 +9,24 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 
-# ===== SciPy NB (optional) =====
 try:
     from scipy.stats import nbinom
     _SCIPY_OK = True
 except Exception:
     _SCIPY_OK = False
 
-# --------------------- Thresholds ---------------------
 ADI_CUTOFF = 1.32
-P_CUTOFF = 1.0 / ADI_CUTOFF       # ≈ 0.757576
+P_CUTOFF = 1.0 / ADI_CUTOFF
 CV2_CUTOFF = 0.49
 
 st.set_page_config(page_title="Unified Forecasting & Optimisation App", layout="wide")
 
-# --------------------- INPUT FILES ---------------------
-st.sidebar.header("Upload Input Files")
-file_articles = st.sidebar.file_uploader("Upload articles.xlsx", type=["xlsx"])
-file_pfe = st.sidebar.file_uploader("Upload PFE HANIN.xlsx", type=["xlsx"])
+# --------------------- SINGLE INPUT FILE ---------------------
+st.sidebar.header("Upload Input File")
+uploaded_file = st.sidebar.file_uploader("Upload master Excel (PFE HANIN with classification sheet)", type=["xlsx"])
 
-if not file_articles or not file_pfe:
-    st.warning("⚠️ Please upload BOTH `articles.xlsx` and `PFE HANIN.xlsx` to continue.")
+if not uploaded_file:
+    st.warning("⚠️ Please upload the Excel file that contains the `classification` sheet.")
     st.stop()
 
 # ============================================
@@ -55,14 +52,12 @@ def compute_everything(df: pd.DataFrame):
         numeric = pd.to_numeric(row.iloc[1:], errors="coerce").fillna(0).values
         nz = numeric != 0
         vals = numeric[nz].tolist()
-
         arr_dates = parsed_dates[nz]
         if vals and arr_dates.notna().all():
             inter = pd.Series(arr_dates).diff().dropna().dt.days.tolist()
             inter_arrivals = [1] + inter
         else:
             inter_arrivals = []
-
         max_len = max(max_len, len(vals), len(inter_arrivals))
         combined_rows.append((produit, vals, inter_arrivals))
         per_product_vals[produit] = vals
@@ -85,7 +80,6 @@ def compute_everything(df: pd.DataFrame):
         else:
             moyenne = ecart = cv2 = np.nan
         stats_rows.append([produit, moyenne, ecart, cv2])
-
     stats_df = pd.DataFrame(stats_rows, columns=["Produit", "moyenne", "écart-type", "CV^2"]).set_index("Produit").sort_index()
 
     counts_rows = []
@@ -93,7 +87,6 @@ def compute_everything(df: pd.DataFrame):
         n_freq = len(vals)
         p = (n_freq / n_periods) if n_periods else np.nan
         counts_rows.append([produit, n_periods, n_freq, p])
-
     counts_df = pd.DataFrame(counts_rows, columns=["Produit", "N périodes", "N fréquences", "p"]).set_index("Produit").sort_index()
 
     methods_df = stats_df.join(counts_df, how="outer")
@@ -161,8 +154,8 @@ def croston_forecast(x, alpha=0.2, variant="croston"):
     if variant == "sba": f *= (1 - alpha / 2.0)
     return float(f)
 
-def grid_search(file_articles, product_codes, method="ses"):
-    df = pd.read_excel(file_articles, sheet_name="classification")
+def grid_search(file, product_codes, method="ses"):
+    df = pd.read_excel(file, sheet_name="classification")
     prod_col = df.columns[0]
     results = []
     for code in product_codes:
@@ -230,10 +223,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 # ----- TAB 1: CLASSIFICATION -----
 with tab1:
-    xls = pd.ExcelFile(file_articles)
-    sheet_name = st.selectbox("Select classification sheet", options=xls.sheet_names)
-    df_raw = pd.read_excel(file_articles, sheet_name=sheet_name)
-
+    df_raw = pd.read_excel(uploaded_file, sheet_name="classification")
     col_produit = df_raw.columns[0]
     produits = sorted(df_raw[col_produit].astype(str).dropna().unique().tolist())
     produit_sel = st.selectbox("Choisir un produit", options=produits)
@@ -259,16 +249,16 @@ with tab1:
 with tab2:
     st.subheader("Grid Search")
 
-    df_class = pd.read_excel(file_articles, sheet_name="classification")
+    df_class = pd.read_excel(uploaded_file, sheet_name="classification")
     all_products = df_class[df_class.columns[0]].dropna().astype(str).unique().tolist()
     product_choice = st.selectbox("Choose product code", options=all_products)
 
     if product_choice:
         st.write(f"🔍 Running grid search for: **{product_choice}**")
 
-        df_ses = grid_search(file_articles, [product_choice], "ses")
-        df_cro = grid_search(file_articles, [product_choice], "croston")
-        df_sba = grid_search(file_articles, [product_choice], "sba")
+        df_ses = grid_search(uploaded_file, [product_choice], "ses")
+        df_cro = grid_search(uploaded_file, [product_choice], "croston")
+        df_sba = grid_search(uploaded_file, [product_choice], "sba")
 
         df_all = pd.concat([df_ses, df_cro, df_sba], ignore_index=True)
         st.dataframe(df_all)
