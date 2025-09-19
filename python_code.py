@@ -1,30 +1,22 @@
 # ============================================
-# MERGED STREAMLIT APP
-# - Classification (p & CV²)
-# - Optimisation (n*, Qr*, Qw*)
-# - Grid Search (SES / Croston / SBA)
-# - Best Params
-# - Final Simulation
-# - Sensitivity Analysis
+# FINAL MERGED STREAMLIT APP
 # ============================================
 
 import io
 import re
-from typing import Tuple, List
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 
-# ===== SciPy NB (primary path) + safe fallback
+# ===== SciPy NB (optional) =====
 try:
     from scipy.stats import nbinom
     _SCIPY_OK = True
 except Exception:
     _SCIPY_OK = False
 
-# --------------------- Syntetos & Boylan thresholds ---------------------
+# --------------------- Thresholds ---------------------
 ADI_CUTOFF = 1.32
 P_CUTOFF = 1.0 / ADI_CUTOFF       # ≈ 0.757576
 CV2_CUTOFF = 0.49
@@ -33,16 +25,18 @@ st.set_page_config(page_title="Unified Forecasting & Optimisation App", layout="
 
 # --------------------- INPUT FILES ---------------------
 st.sidebar.header("Upload Input Files")
-uploaded_class = st.sidebar.file_uploader("Upload classification workbook", type=["xlsx", "xls"])
-uploaded_opt = st.sidebar.file_uploader("Upload optimisation workbook (optional)", type=["xlsx", "xls"])
 file_articles = st.sidebar.file_uploader("Upload articles.xlsx", type=["xlsx"])
 file_pfe = st.sidebar.file_uploader("Upload PFE HANIN.xlsx", type=["xlsx"])
+
+if not file_articles or not file_pfe:
+    st.warning("⚠️ Please upload BOTH `articles.xlsx` and `PFE HANIN.xlsx` to continue.")
+    st.stop()
 
 # ============================================
 # CLASSIFICATION & OPTIMISATION FUNCTIONS
 # ============================================
 
-def choose_method(p: float, cv2: float) -> Tuple[str, str]:
+def choose_method(p: float, cv2: float):
     if pd.isna(p) or pd.isna(cv2): return "Données insuffisantes", ""
     if p <= 0: return "Aucune demande", ""
     if p >= P_CUTOFF and cv2 <= CV2_CUTOFF: return "Régulier", "SES"
@@ -92,10 +86,7 @@ def compute_everything(df: pd.DataFrame):
             moyenne = ecart = cv2 = np.nan
         stats_rows.append([produit, moyenne, ecart, cv2])
 
-    stats_df = (
-        pd.DataFrame(stats_rows, columns=["Produit", "moyenne", "écart-type", "CV^2"])
-        .set_index("Produit").sort_index()
-    )
+    stats_df = pd.DataFrame(stats_rows, columns=["Produit", "moyenne", "écart-type", "CV^2"]).set_index("Produit").sort_index()
 
     counts_rows = []
     for produit, vals in per_product_vals.items():
@@ -103,10 +94,7 @@ def compute_everything(df: pd.DataFrame):
         p = (n_freq / n_periods) if n_periods else np.nan
         counts_rows.append([produit, n_periods, n_freq, p])
 
-    counts_df = (
-        pd.DataFrame(counts_rows, columns=["Produit", "N périodes", "N fréquences", "p"])
-        .set_index("Produit").sort_index()
-    )
+    counts_df = pd.DataFrame(counts_rows, columns=["Produit", "N périodes", "N fréquences", "p"]).set_index("Produit").sort_index()
 
     methods_df = stats_df.join(counts_df, how="outer")
     cats = methods_df.apply(lambda r: choose_method(r["p"], r["CV^2"]), axis=1, result_type="expand")
@@ -134,7 +122,7 @@ def make_plot(methods_df: pd.DataFrame):
     return fig
 
 # ============================================
-# FORECASTING & SIMULATION FUNCTIONS
+# FORECASTING FUNCTIONS
 # ============================================
 
 PRODUCT_CODES = ["EM0400", "EM1499", "EM1091", "EM1523", "EM0392", "EM1526"]
@@ -145,8 +133,7 @@ SERVICE_LEVEL_DEF = 0.95
 
 def ses_forecast(x, alpha=0.2):
     x = pd.Series(x).fillna(0.0).astype(float).values
-    if len(x) == 0:
-        return 0.0
+    if len(x) == 0: return 0.0
     l = x[0]
     for t in range(1, len(x)):
         l = alpha * x[t] + (1 - alpha) * l
@@ -155,8 +142,7 @@ def ses_forecast(x, alpha=0.2):
 def croston_forecast(x, alpha=0.2, variant="croston"):
     x = pd.Series(x).fillna(0.0).astype(float).values
     x = np.where(x < 0, 0.0, x)
-    if (x == 0).all():
-        return 0.0
+    if (x == 0).all(): return 0.0
     nz_idx = [i for i, v in enumerate(x) if v > 0]
     first = nz_idx[0]
     z = x[first]
@@ -173,34 +159,27 @@ def croston_forecast(x, alpha=0.2, variant="croston"):
             p = alpha * I_t + (1 - alpha) * p
             psd = 0
     f = z / p
-    if variant == "sba":
-        f *= (1 - alpha / 2.0)
+    if variant == "sba": f *= (1 - alpha / 2.0)
     return float(f)
 
 def grid_search(file_articles, product_codes, method="ses"):
     df = pd.read_excel(file_articles, sheet_name="classification")
     prod_col = df.columns[0]
-
     results = []
     for code in product_codes:
         row = df.loc[df[prod_col] == code]
-        if row.empty:
-            continue
+        if row.empty: continue
         series = row.drop(columns=[prod_col]).T.squeeze().astype(float).fillna(0.0)
         series.index = pd.to_datetime(series.index, errors="coerce")
-        series = series.sort_index()
-        values = series.values
+        values = series.sort_index().values
 
         for alpha in ALPHAS:
             for w in WINDOW_RATIOS:
                 for itv in RECALC_INTERVALS:
                     split_idx = int(len(values) * w)
-                    if split_idx < 2:
-                        continue
-                    train = values[:split_idx]
+                    if split_idx < 2: continue
                     test = values[split_idx:]
-
-                    forecasts, errors = [], []
+                    errors = []
                     for i in range(len(test)):
                         subtrain = values[:split_idx+i]
                         if method == "ses":
@@ -209,36 +188,25 @@ def grid_search(file_articles, product_codes, method="ses"):
                             f = croston_forecast(subtrain, alpha, "croston")
                         else:
                             f = croston_forecast(subtrain, alpha, "sba")
-                        forecasts.append(f)
                         errors.append(test[i] - f)
-
-                    if not errors:
-                        continue
+                    if not errors: continue
                     e = pd.Series(errors)
-                    ME, absME = e.mean(), e.abs().mean()
-                    MSE, RMSE = (e**2).mean(), np.sqrt((e**2).mean())
-
                     results.append({
                         "code": code, "alpha": alpha, "window_ratio": w,
-                        "recalc_interval": itv, "ME": ME, "absME": absME,
-                        "MSE": MSE, "RMSE": RMSE, "method": method,
-                        "n_points_used": len(errors)
+                        "recalc_interval": itv, "ME": e.mean(),
+                        "absME": e.abs().mean(),
+                        "MSE": (e**2).mean(), "RMSE": np.sqrt((e**2).mean()),
+                        "method": method, "n_points_used": len(errors)
                     })
-
     return pd.DataFrame(results)
 
 def run_final(best_params, service_level=SERVICE_LEVEL_DEF):
     results = []
     for _, row in best_params.iterrows():
-        code = row["code"]
-        method = row["method"]
-        alpha = row["alpha"]
-        w = row["window_ratio"]
-        itv = row["recalc_interval"]
-
         results.append({
-            "code": code, "method": method, "alpha": alpha,
-            "window_ratio": w, "interval": itv, "service_level": service_level,
+            "code": row["code"], "method": row["method"], "alpha": row["alpha"],
+            "window_ratio": row["window_ratio"], "interval": row["recalc_interval"],
+            "service_level": service_level,
             "ROP_usine": np.random.uniform(100,500),
             "SS_usine": np.random.uniform(50,300),
             "ROP_fournisseur": np.random.uniform(200,600),
@@ -263,61 +231,62 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 # ----- TAB 1: CLASSIFICATION -----
 with tab1:
-    if uploaded_class is not None:
-        xls = pd.ExcelFile(uploaded_class)
-        sheet_name = st.selectbox("Select classification sheet", options=xls.sheet_names)
-        df_raw = pd.read_excel(uploaded_class, sheet_name=sheet_name)
-        combined_df, stats_df, counts_df, methods_df = compute_everything(df_raw)
-        st.dataframe(methods_df)
+    xls = pd.ExcelFile(file_articles)
+    sheet_name = st.selectbox("Select classification sheet", options=xls.sheet_names)
+    df_raw = pd.read_excel(file_articles, sheet_name=sheet_name)
 
-        fig = make_plot(methods_df)
-        st.pyplot(fig)
-    else:
-        st.info("Upload classification workbook to begin.")
+    col_produit = df_raw.columns[0]
+    produits = sorted(df_raw[col_produit].astype(str).dropna().unique().tolist())
+    produit_sel = st.selectbox("Choisir un produit", options=produits)
+
+    combined_df, stats_df, counts_df, methods_df = compute_everything(df_raw)
+
+    st.subheader("Stats & Counts")
+    st.dataframe(stats_df.loc[[produit_sel]])
+    st.dataframe(counts_df.loc[[produit_sel]])
+
+    st.subheader("Taille / Fréquence (sélection)")
+    mask = (combined_df["Produit"] == produit_sel)
+    st.dataframe(combined_df[mask])
+
+    st.subheader("Méthodes suggérées")
+    st.dataframe(methods_df.loc[[produit_sel]])
+
+    st.subheader("Graphe p vs CV²")
+    fig = make_plot(methods_df.loc[[produit_sel]])
+    st.pyplot(fig)
 
 # ----- TAB 2: GRID SEARCH -----
 with tab2:
-    if file_articles:
-        st.subheader("Grid Search Results")
-        df_ses = grid_search(file_articles, PRODUCT_CODES, "ses")
-        df_cro = grid_search(file_articles, PRODUCT_CODES, "croston")
-        df_sba = grid_search(file_articles, PRODUCT_CODES, "sba")
-        df_all = pd.concat([df_ses, df_cro, df_sba], ignore_index=True)
-        st.dataframe(df_all.head(50))
-    else:
-        st.warning("Upload articles.xlsx to run grid search.")
+    st.subheader("Grid Search Results")
+    df_ses = grid_search(file_articles, PRODUCT_CODES, "ses")
+    df_cro = grid_search(file_articles, PRODUCT_CODES, "croston")
+    df_sba = grid_search(file_articles, PRODUCT_CODES, "sba")
+    df_all = pd.concat([df_ses, df_cro, df_sba], ignore_index=True)
+    st.dataframe(df_all.head(50))
 
 # ----- TAB 3: BEST PARAMS -----
 with tab3:
-    if file_articles:
-        best_params = df_all.loc[df_all.groupby("code")["RMSE"].idxmin()].reset_index(drop=True)
-        st.subheader("Best Params per Article")
-        st.dataframe(best_params)
-    else:
-        st.info("Run Grid Search first to compute best params.")
+    best_params = df_all.loc[df_all.groupby("code")["RMSE"].idxmin()].reset_index(drop=True)
+    st.subheader("Best Params per Article")
+    st.dataframe(best_params)
 
 # ----- TAB 4: FINAL SIMULATION -----
 with tab4:
-    if file_articles:
-        final_df = run_final(best_params, service_level=0.95)
-        st.subheader("Final Simulation (95% Service Level)")
-        st.dataframe(final_df)
-    else:
-        st.info("Upload input files to run simulation.")
+    final_df = run_final(best_params, service_level=0.95)
+    st.subheader("Final Simulation (95% Service Level)")
+    st.dataframe(final_df)
 
 # ----- TAB 5: SENSITIVITY -----
 with tab5:
-    if file_articles:
-        levels = [0.90, 0.92, 0.95, 0.98]
-        sensi_results = []
-        for sl in levels:
-            df_sl = run_final(best_params, service_level=sl)
-            sensi_results.append(df_sl)
-            st.write(f"=== Results for SL={sl} ===")
-            st.dataframe(df_sl)
-        sensi_all = pd.concat(sensi_results, ignore_index=True)
-        summary = sensi_all.groupby(["code","service_level"]).mean(numeric_only=True).reset_index()
-        st.write("📊 Summary")
-        st.dataframe(summary)
-    else:
-        st.info("Upload input files to run sensitivity analysis.")
+    levels = [0.90, 0.92, 0.95, 0.98]
+    sensi_results = []
+    for sl in levels:
+        df_sl = run_final(best_params, service_level=sl)
+        sensi_results.append(df_sl)
+        st.write(f"=== Results for SL={sl} ===")
+        st.dataframe(df_sl)
+    sensi_all = pd.concat(sensi_results, ignore_index=True)
+    summary = sensi_all.groupby(["code","service_level"]).mean(numeric_only=True).reset_index()
+    st.write("📊 Summary")
+    st.dataframe(summary)
