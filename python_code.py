@@ -33,7 +33,7 @@ if not file_articles or not file_pfe:
     st.stop()
 
 # ============================================
-# CLASSIFICATION & OPTIMISATION FUNCTIONS
+# CLASSIFICATION FUNCTIONS
 # ============================================
 
 def choose_method(p: float, cv2: float):
@@ -125,7 +125,6 @@ def make_plot(methods_df: pd.DataFrame):
 # FORECASTING FUNCTIONS
 # ============================================
 
-PRODUCT_CODES = ["EM0400", "EM1499", "EM1091", "EM1523", "EM0392", "EM1526"]
 ALPHAS = [0.1, 0.2, 0.3, 0.4]
 WINDOW_RATIOS = [0.6, 0.7, 0.8]
 RECALC_INTERVALS = [5, 10, 20]
@@ -258,35 +257,57 @@ with tab1:
 
 # ----- TAB 2: GRID SEARCH -----
 with tab2:
-    st.subheader("Grid Search Results")
-    df_ses = grid_search(file_articles, PRODUCT_CODES, "ses")
-    df_cro = grid_search(file_articles, PRODUCT_CODES, "croston")
-    df_sba = grid_search(file_articles, PRODUCT_CODES, "sba")
-    df_all = pd.concat([df_ses, df_cro, df_sba], ignore_index=True)
-    st.dataframe(df_all.head(50))
+    st.subheader("Grid Search")
+
+    df_class = pd.read_excel(file_articles, sheet_name="classification")
+    all_products = df_class[df_class.columns[0]].dropna().astype(str).unique().tolist()
+    product_choice = st.selectbox("Choose product code", options=all_products)
+
+    if product_choice:
+        st.write(f"🔍 Running grid search for: **{product_choice}**")
+
+        df_ses = grid_search(file_articles, [product_choice], "ses")
+        df_cro = grid_search(file_articles, [product_choice], "croston")
+        df_sba = grid_search(file_articles, [product_choice], "sba")
+
+        df_all = pd.concat([df_ses, df_cro, df_sba], ignore_index=True)
+        st.dataframe(df_all)
+
+        st.session_state["grid_results"] = df_all
 
 # ----- TAB 3: BEST PARAMS -----
 with tab3:
-    best_params = df_all.loc[df_all.groupby("code")["RMSE"].idxmin()].reset_index(drop=True)
-    st.subheader("Best Params per Article")
-    st.dataframe(best_params)
+    if "grid_results" in st.session_state:
+        df_all = st.session_state["grid_results"]
+        best_params = df_all.loc[df_all.groupby("code")["RMSE"].idxmin()].reset_index(drop=True)
+        st.subheader("Best Params for Selected Product")
+        st.dataframe(best_params)
+        st.session_state["best_params"] = best_params
+    else:
+        st.info("⚠️ Run Grid Search first.")
 
 # ----- TAB 4: FINAL SIMULATION -----
 with tab4:
-    final_df = run_final(best_params, service_level=0.95)
-    st.subheader("Final Simulation (95% Service Level)")
-    st.dataframe(final_df)
+    if "best_params" in st.session_state:
+        final_df = run_final(st.session_state["best_params"], service_level=0.95)
+        st.subheader("Final Simulation (95% Service Level)")
+        st.dataframe(final_df)
+    else:
+        st.info("⚠️ Run Best Params first.")
 
 # ----- TAB 5: SENSITIVITY -----
 with tab5:
-    levels = [0.90, 0.92, 0.95, 0.98]
-    sensi_results = []
-    for sl in levels:
-        df_sl = run_final(best_params, service_level=sl)
-        sensi_results.append(df_sl)
-        st.write(f"=== Results for SL={sl} ===")
-        st.dataframe(df_sl)
-    sensi_all = pd.concat(sensi_results, ignore_index=True)
-    summary = sensi_all.groupby(["code","service_level"]).mean(numeric_only=True).reset_index()
-    st.write("📊 Summary")
-    st.dataframe(summary)
+    if "best_params" in st.session_state:
+        levels = [0.90, 0.92, 0.95, 0.98]
+        sensi_results = []
+        for sl in levels:
+            df_sl = run_final(st.session_state["best_params"], service_level=sl)
+            sensi_results.append(df_sl)
+            st.write(f"=== Results for SL={sl} ===")
+            st.dataframe(df_sl)
+        sensi_all = pd.concat(sensi_results, ignore_index=True)
+        summary = sensi_all.groupby(["code","service_level"]).mean(numeric_only=True).reset_index()
+        st.write("📊 Summary")
+        st.dataframe(summary)
+    else:
+        st.info("⚠️ Run Best Params first.")
