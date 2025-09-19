@@ -449,6 +449,113 @@ with tab1:
     st.header("Classification (p vs CV²)")
     uploaded = st.file_uploader("Téléverser le classeur de classification", type=["xlsx", "xls"], key="clf")
     uploaded_opt = st.file_uploader("Classeur optimisation (optionnel)", type=["xlsx", "xls"], key="opt")
+def compute_and_show(uploaded, sheet_name, uploaded_opt):
+    if uploaded is None or sheet_name is None:
+        return
+    
+    # === Read classification sheet ===
+    df_raw = pd.read_excel(uploaded, sheet_name=sheet_name)
+
+    # Select product codes
+    col_produit = df_raw.columns[0]
+    produits = sorted(df_raw[col_produit].astype(str).dropna().unique().tolist())
+    if not produits:
+        st.warning("Aucun produit trouvé dans la première colonne.")
+        return
+    
+    produit_sel = st.selectbox("Choisir un produit", options=produits, key="selected_product")
+
+    # Compute everything
+    combined_df, stats_df, counts_df, methods_df = compute_everything(df_raw)
+
+    # Filter for selected product
+    stats_one = stats_df.loc[[produit_sel]] if produit_sel in stats_df.index else stats_df.iloc[0:0]
+    counts_one = counts_df.loc[[produit_sel]] if produit_sel in counts_df.index else counts_df.iloc[0:0]
+    methods_one = methods_df.loc[[produit_sel]] if produit_sel in methods_df.index else methods_df.iloc[0:0]
+
+    # Display tables
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("*Tableau 1 — moyenne / écart-type / CV² (sélection)*")
+        st.dataframe(stats_one.reset_index(), use_container_width=True)
+    with c2:
+        st.markdown("*Tableau 2 — N périodes / N fréquences / p (sélection)*")
+        st.dataframe(counts_one.reset_index(), use_container_width=True)
+
+    st.markdown("*Combiné — taille / frequence (sélection)*")
+    comb_sel = pd.DataFrame()
+    if not combined_df.empty:
+        mask_taille = (combined_df["Produit"] == produit_sel) & (combined_df["Type"] == "taille")
+        if mask_taille.any():
+            idx = combined_df.index[mask_taille][0]
+            rows = [idx]
+            if idx + 1 in combined_df.index:
+                rows.append(idx + 1)
+            comb_sel = combined_df.loc[rows]
+    st.dataframe(comb_sel if not comb_sel.empty else pd.DataFrame(), use_container_width=True)
+
+    # Plot
+    st.markdown("*Graphe — p vs CV² avec seuils (sélection)*")
+    if not methods_one.empty:
+        fig = make_plot(methods_one)
+        st.pyplot(fig, use_container_width=True)
+    else:
+        st.info("Pas de graphe pour ce produit.")
+
+    # Show suggested method
+    st.markdown("*Méthode par produit (sélection)*")
+    st.dataframe(methods_one.reset_index(), use_container_width=True)
+
+    # Optimisation (Qr*, Qw*, n*)
+    st.markdown("*Optimisation — n*, Qr*, Qw* (sélection)**")
+    opt_source = uploaded_opt or uploaded
+    st.caption("Classeur utilisé : " + ("optimisation séparé" if uploaded_opt is not None else "classification"))
+    opt_df, info_msgs, warn_msgs = compute_qr_qw_from_workbook(opt_source)
+    for msg in info_msgs:
+        st.info(msg)
+    for msg in warn_msgs:
+        st.warning(msg)
+
+    import re
+    m = re.search(r"\b[A-Z]{2}\d{4}\b", str(produit_sel))
+    opt_key = m.group(0) if m else str(produit_sel)
+    opt_one = opt_df[opt_df["Code Produit"].astype(str) == opt_key]
+    if opt_one.empty:
+        st.info(f"Aucune ligne d’optimisation pour *{produit_sel}* (code recherché : '{opt_key}').")
+    else:
+        st.dataframe(opt_one, use_container_width=True)
+
+    # Download all results
+    xbuf = excel_bytes(combined_df, stats_df, counts_df, methods_df)
+    st.download_button(
+        "Télécharger TOUS les résultats (Excel)",
+        data=xbuf,
+        file_name="resultats_classification.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    # Download product-specific plot
+    if not methods_one.empty:
+        import io
+        pbuf = io.BytesIO()
+        fig.savefig(pbuf, format="png", bbox_inches="tight")
+        pbuf.seek(0)
+        st.download_button(
+            "Télécharger le graphe du produit (PNG)",
+            data=pbuf,
+            file_name=f"classification_{opt_key or 'produit'}.png",
+            mime="image/png"
+        )
+
+    # Download optimisations
+    if not opt_df.empty:
+        st.download_button(
+            "Télécharger TOUTES les optimisations (CSV)",
+            data=opt_df.to_csv(index=False).encode("utf-8"),
+            file_name="optimisation_qr_qw.csv",
+            mime="text/csv"
+        )
+
     if uploaded is not None:
         try:
             import pandas as pd
