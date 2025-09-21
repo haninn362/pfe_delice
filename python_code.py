@@ -1,4 +1,5 @@
-# ==================================================
+see this code 
+"# ==================================================
 # APPLICATION STREAMLIT - PFE HANIN
 # Base Stock + Prévisions (SES / Croston / SBA)
 # Sélection meilleure méthode + Simulation commandes
@@ -269,27 +270,27 @@ def run_sensitivity_with_methods(file_path, best_per_code, qr_map):
             all_results.append(summary)
     return pd.concat(all_results, ignore_index=True)
 
-def plot_tradeoff(table_view):
-    if table_view.empty:
+def plot_tradeoff(df_summary):
+    if df_summary.empty:
         st.warning("Pas de résultats pour tracer la sensibilité.")
         return
     
     plt.figure(figsize=(8,6))
-    methods = table_view["method"].unique()
+    methods = df_summary["method"].unique()
     markers = {"ses":"o", "croston":"s", "sba":"^"}
     
     for method in methods:
-        subset = table_view[table_view["method"] == method]
+        subset = df_summary[df_summary["method"] == method]
         plt.scatter(subset["holding_pct"], subset["rupture_pct"],
                     label=method, marker=markers.get(method,"o"))
         for _, row in subset.iterrows():
-            plt.annotate(f"{row['method']} (SL={row['SL']})",
+            plt.annotate(f"{row['code']} (SL={row['service_level']})",
                          (row["holding_pct"], row["rupture_pct"]),
                          fontsize=8, alpha=0.7)
     
     plt.xlabel("Holding %")
     plt.ylabel("Rupture %")
-    plt.title("Trade-off Holding vs Rupture (%) – Aggregated Methods & SL")
+    plt.title("Trade-off Holding vs Rupture (%) – All Methods & SL")
     plt.legend()
     st.pyplot(plt)
 
@@ -314,33 +315,19 @@ if uploaded_file is not None:
         with tab2:
             st.subheader("Meilleure méthode de prévision")
             all_candidates = grid_search_all_methods(uploaded_file, PRODUCT_CODE)
-
-            # Pick best params per method (not only global best)
-            best_per_method = all_candidates.loc[
-                all_candidates.groupby("method")["RMSE"].idxmin()
-            ].reset_index(drop=True)
-
-            st.dataframe(best_per_method)
+            best_per_code = all_candidates.loc[all_candidates["RMSE"].idxmin()].to_frame().T.reset_index(drop=True)
+            st.dataframe(best_per_code)
 
         with tab3:
             st.subheader(f"Simulation finale (SL={SERVICE_LEVEL:.2f})")
-            final_results = simulate_orders(uploaded_file, best_per_method, qr_map, service_level=SERVICE_LEVEL)
+            final_results = simulate_orders(uploaded_file, best_per_code, qr_map, service_level=SERVICE_LEVEL)
             st.dataframe(final_results.head(50))
 
         with tab4:
             st.subheader("Analyse de sensibilité")
-            sensitivity_summary = run_sensitivity_with_methods(uploaded_file, best_per_method, qr_map)
+            sensitivity_summary = run_sensitivity_with_methods(uploaded_file, best_per_code, qr_map)
             st.dataframe(sensitivity_summary.head(50))
-
-            # === NEW TABLE (aggregated by method & SL) ===
-            st.subheader("Résumé par méthode et niveau de service")
-            table_view = sensitivity_summary.groupby(["method","service_level"]).agg(
-                holding_pct=("holding_pct","mean"),
-                rupture_pct=("rupture_pct","mean")
-            ).reset_index().rename(columns={"service_level":"SL"})
-            st.dataframe(table_view)
-
-            # Plot only aggregated values
-            plot_tradeoff(table_view)
+            plot_tradeoff(sensitivity_summary)
 else:
     st.info("📥 Veuillez charger un fichier Excel pour commencer.")
+"
