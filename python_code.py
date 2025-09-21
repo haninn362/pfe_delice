@@ -326,6 +326,15 @@ if uploaded_file is not None:
             st.subheader("Analyse de sensibilité")
             sensitivity_summary = run_sensitivity_with_methods(uploaded_file, best_per_code, qr_map)
             st.dataframe(sensitivity_summary.head(50))
+
+            # === NEW TABLE (like the screenshot) ===
+            st.subheader("Résumé par méthode et niveau de service")
+            table_view = sensitivity_summary.groupby(["method","service_level"]).agg(
+                holding_pct=("holding_pct","mean"),
+                rupture_pct=("rupture_pct","mean")
+            ).reset_index().rename(columns={"service_level":"SL"})
+            st.dataframe(table_view)
+
             plot_tradeoff(sensitivity_summary)
 else:
     st.info("📥 Veuillez charger un fichier Excel pour commencer.")
