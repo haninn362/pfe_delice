@@ -23,11 +23,12 @@ uploaded_file = st.sidebar.file_uploader("Chargez le fichier Excel", type=["xlsx
 default_products = ["EM0400","EM1499","EM1091","EM1523","EM0392","EM1526"]
 PRODUCT_CODES = st.sidebar.multiselect("Choisir les produits", default_products, default=default_products)
 
-LEAD_TIME = st.sidebar.number_input("Lead time usine (jours)", 1, 60, 10)
-LEAD_TIME_SUPPLIER = st.sidebar.number_input("Lead time fournisseur (jours)", 1, 60, 3)
-SERVICE_LEVEL = st.sidebar.slider("Service level (par défaut)", 0.80, 0.99, 0.95)
-NB_SIM = st.sidebar.number_input("Nombre de simulations", 100, 5000, 1000, step=100)
+# Fixed parameters
+NB_SIM = 1000
 RNG_SEED = 42
+LEAD_TIME = 10
+LEAD_TIME_SUPPLIER = 3
+SERVICE_LEVEL = 0.95
 
 ALPHAS = [0.1, 0.2, 0.3, 0.4]
 WINDOW_RATIOS = [0.6, 0.7, 0.8]
@@ -35,7 +36,7 @@ RECALC_INTERVALS = [5, 10, 20]
 SERVICE_LEVELS = [0.90, 0.92, 0.95, 0.98]
 
 # ==================================================
-# PARTIE 1 : Qr* et Qw* (Base Stock)
+# PARTIE 1 : Qr*, Qw* et n* (Base Stock)
 # ==================================================
 def _find_product_sheet(excel_path, code: str) -> str:
     xls = pd.ExcelFile(excel_path)
@@ -52,7 +53,7 @@ def _find_product_sheet(excel_path, code: str) -> str:
 def compute_qstars(file_path, product_codes):
     df_conso = pd.read_excel(file_path, sheet_name="consommation depots externe")
     df_conso = df_conso.groupby('Code Produit')['Quantite STIAL'].sum()
-    qr_map, qw_map = {}, {}
+    qr_map, qw_map, n_map = {}, {}, {}
     for code in product_codes:
         sheet = _find_product_sheet(file_path, code)
         df = pd.read_excel(file_path, sheet_name=sheet)
@@ -60,19 +61,24 @@ def compute_qstars(file_path, product_codes):
         C_w = df['Cw : cout stockage\nchez F'].iloc[0]
         A_w = df['Aw : cout de\nlancement chez U'].iloc[0]
         A_r = df['Ar : cout de \nlancement chez F'].iloc[0]
+
         n = (A_w * C_r) / (A_r * C_w)
         n = 1 if n < 1 else round(n)
         n1, n2 = int(n), int(n) + 1
         F_n1 = (A_r + A_w / n1) * (n1 * C_w + C_r)
         F_n2 = (A_r + A_w / n2) * (n2 * C_w + C_r)
         n_star = n1 if F_n1 <= F_n2 else n2
+
         D = df_conso.get(code, 0)
         tau = 1
         Qr_star = ((2 * (A_r + A_w / n_star) * D) / (n_star * C_w + C_r * tau)) ** 0.5
         Qw_star = n_star * Qr_star
+
         qr_map[code] = round(Qr_star, 2)
         qw_map[code] = round(Qw_star, 2)
-    return qr_map, qw_map
+        n_map[code] = n_star
+
+    return qr_map, qw_map, n_map
 
 # ==================================================
 # PARTIE 2 : Prévisions (SES / Croston / SBA)
@@ -267,21 +273,31 @@ def run_sensitivity(file_path, best_per_code, qr_map):
 # ==================================================
 if uploaded_file is not None:
     with st.spinner("⏳ Calcul en cours..."):
-        qr_map, qw_map = compute_qstars(uploaded_file, PRODUCT_CODES)
+        qr_map, qw_map, n_map = compute_qstars(uploaded_file, PRODUCT_CODES)
         tab1, tab2, tab3, tab4 = st.tabs(["📊 Base Stock", "🔮 Prévisions", "📦 Simulation", "📈 Sensibilité"])
+
         with tab1:
-            st.subheader("Qr* et Qw* (Base Stock)")
-            st.json({"Qr*": qr_map, "Qw*": qw_map})
+            st.subheader("Qr*, Qw* et n* (Base Stock)")
+            df_base = pd.DataFrame({
+                "Produit": list(qr_map.keys()),
+                "Qr*": list(qr_map.values()),
+                "Qw*": list(qw_map.values()),
+                "n*": list(n_map.values())
+            })
+            st.dataframe(df_base)
+
         with tab2:
             st.subheader("Meilleure méthode de prévision")
             all_candidates = grid_search_all_methods(uploaded_file)
             idx = all_candidates.groupby("code")["RMSE"].idxmin()
             best_per_code = all_candidates.loc[idx].reset_index(drop=True)
             st.dataframe(best_per_code)
+
         with tab3:
             st.subheader(f"Simulation finale (SL={SERVICE_LEVEL:.2f})")
             final_results = simulate_orders(uploaded_file, best_per_code, qr_map, service_level=SERVICE_LEVEL)
             st.dataframe(final_results.head(50))
+
         with tab4:
             st.subheader("Analyse de sensibilité")
             sensitivity_results = run_sensitivity(uploaded_file, best_per_code, qr_map)
