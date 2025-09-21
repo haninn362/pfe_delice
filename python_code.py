@@ -269,27 +269,27 @@ def run_sensitivity_with_methods(file_path, best_per_code, qr_map):
             all_results.append(summary)
     return pd.concat(all_results, ignore_index=True)
 
-def plot_tradeoff(df_summary):
-    if df_summary.empty:
+def plot_tradeoff(table_view):
+    if table_view.empty:
         st.warning("Pas de résultats pour tracer la sensibilité.")
         return
     
     plt.figure(figsize=(8,6))
-    methods = df_summary["method"].unique()
+    methods = table_view["method"].unique()
     markers = {"ses":"o", "croston":"s", "sba":"^"}
     
     for method in methods:
-        subset = df_summary[df_summary["method"] == method]
+        subset = table_view[table_view["method"] == method]
         plt.scatter(subset["holding_pct"], subset["rupture_pct"],
                     label=method, marker=markers.get(method,"o"))
         for _, row in subset.iterrows():
-            plt.annotate(f"{row['code']} (SL={row['service_level']})",
+            plt.annotate(f"{row['method']} (SL={row['SL']})",
                          (row["holding_pct"], row["rupture_pct"]),
                          fontsize=8, alpha=0.7)
     
     plt.xlabel("Holding %")
     plt.ylabel("Rupture %")
-    plt.title("Trade-off Holding vs Rupture (%) – All Methods & SL")
+    plt.title("Trade-off Holding vs Rupture (%) – Aggregated Methods & SL")
     plt.legend()
     st.pyplot(plt)
 
@@ -327,7 +327,7 @@ if uploaded_file is not None:
             sensitivity_summary = run_sensitivity_with_methods(uploaded_file, best_per_code, qr_map)
             st.dataframe(sensitivity_summary.head(50))
 
-            # === NEW TABLE (like the screenshot) ===
+            # === NEW TABLE (aggregated by method & SL) ===
             st.subheader("Résumé par méthode et niveau de service")
             table_view = sensitivity_summary.groupby(["method","service_level"]).agg(
                 holding_pct=("holding_pct","mean"),
@@ -335,6 +335,7 @@ if uploaded_file is not None:
             ).reset_index().rename(columns={"service_level":"SL"})
             st.dataframe(table_view)
 
-            plot_tradeoff(sensitivity_summary)
+            # Plot only aggregated values
+            plot_tradeoff(table_view)
 else:
     st.info("📥 Veuillez charger un fichier Excel pour commencer.")
