@@ -314,17 +314,22 @@ if uploaded_file is not None:
         with tab2:
             st.subheader("Meilleure méthode de prévision")
             all_candidates = grid_search_all_methods(uploaded_file, PRODUCT_CODE)
-            best_per_code = all_candidates.loc[all_candidates["RMSE"].idxmin()].to_frame().T.reset_index(drop=True)
-            st.dataframe(best_per_code)
+
+            # Pick best params per method (not only global best)
+            best_per_method = all_candidates.loc[
+                all_candidates.groupby("method")["RMSE"].idxmin()
+            ].reset_index(drop=True)
+
+            st.dataframe(best_per_method)
 
         with tab3:
             st.subheader(f"Simulation finale (SL={SERVICE_LEVEL:.2f})")
-            final_results = simulate_orders(uploaded_file, best_per_code, qr_map, service_level=SERVICE_LEVEL)
+            final_results = simulate_orders(uploaded_file, best_per_method, qr_map, service_level=SERVICE_LEVEL)
             st.dataframe(final_results.head(50))
 
         with tab4:
             st.subheader("Analyse de sensibilité")
-            sensitivity_summary = run_sensitivity_with_methods(uploaded_file, best_per_code, qr_map)
+            sensitivity_summary = run_sensitivity_with_methods(uploaded_file, best_per_method, qr_map)
             st.dataframe(sensitivity_summary.head(50))
 
             # === NEW TABLE (aggregated by method & SL) ===
