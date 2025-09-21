@@ -21,8 +21,7 @@ st.sidebar.header("⚙️ Paramètres")
 uploaded_file = st.sidebar.file_uploader("Chargez le fichier Excel", type=["xlsx"])
 
 default_products = ["EM0400","EM1499","EM1091","EM1523","EM0392","EM1526"]
-# PRODUCT_CODES = st.sidebar.multiselect("Choisir les produits", default_products, default=default_products)
-PRODUCT_CODES = st.sidebar.selectbox("Choisir le produit", default_products,default=default_products, index=0)
+PRODUCT_CODES = st.sidebar.multiselect("Choisir les produits", default_products, default=default_products)
 
 
 # Fixed parameters
