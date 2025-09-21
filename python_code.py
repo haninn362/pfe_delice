@@ -21,8 +21,7 @@ st.sidebar.header("⚙️ Paramètres")
 uploaded_file = st.sidebar.file_uploader("Chargez le fichier Excel", type=["xlsx"])
 
 default_products = ["EM0400","EM1499","EM1091","EM1523","EM0392","EM1526"]
-PRODUCT_CODES = st.sidebar.multiselect("Choisir les produits", default_products, default=default_products)
-
+PRODUCT_CODE = st.sidebar.selectbox("Choisir le produit", default_products, index=0)
 
 # Fixed parameters
 NB_SIM = 1000
@@ -51,11 +50,11 @@ def _find_product_sheet(excel_path, code: str) -> str:
             return xls.sheet_names[sheets.index(s)]
     raise ValueError(f"[Sheet] Onglet pour '{code}' introuvable.")
 
-def compute_qstars(file_path, product_codes):
+def compute_qstars(file_path, product_code):
     df_conso = pd.read_excel(file_path, sheet_name="consommation depots externe")
     df_conso = df_conso.groupby('Code Produit')['Quantite STIAL'].sum()
     qr_map, qw_map, n_map = {}, {}, {}
-    for code in product_codes:
+    for code in [product_code]:
         sheet = _find_product_sheet(file_path, code)
         df = pd.read_excel(file_path, sheet_name=sheet)
         C_r = df['Cr : cout stockage/article '].iloc[0]
@@ -163,9 +162,9 @@ def compute_metrics(df_run):
     absME = e.abs().mean()
     return absME, MSE, RMSE
 
-def grid_search_all_methods(file_path):
+def grid_search_all_methods(file_path, product_code):
     candidates = []
-    for code in PRODUCT_CODES:
+    for code in [product_code]:
         for method in ["ses","croston","sba"]:
             metrics_rows = []
             for a in ALPHAS:
@@ -274,7 +273,7 @@ def run_sensitivity(file_path, best_per_code, qr_map):
 # ==================================================
 if uploaded_file is not None:
     with st.spinner("⏳ Calcul en cours..."):
-        qr_map, qw_map, n_map = compute_qstars(uploaded_file, PRODUCT_CODES)
+        qr_map, qw_map, n_map = compute_qstars(uploaded_file, PRODUCT_CODE)
         tab1, tab2, tab3, tab4 = st.tabs(["📊 Base Stock", "🔮 Prévisions", "📦 Simulation", "📈 Sensibilité"])
 
         with tab1:
@@ -289,9 +288,8 @@ if uploaded_file is not None:
 
         with tab2:
             st.subheader("Meilleure méthode de prévision")
-            all_candidates = grid_search_all_methods(uploaded_file)
-            idx = all_candidates.groupby("code")["RMSE"].idxmin()
-            best_per_code = all_candidates.loc[idx].reset_index(drop=True)
+            all_candidates = grid_search_all_methods(uploaded_file, PRODUCT_CODE)
+            best_per_code = all_candidates.loc[all_candidates["RMSE"].idxmin()].to_frame().T.reset_index(drop=True)
             st.dataframe(best_per_code)
 
         with tab3:
