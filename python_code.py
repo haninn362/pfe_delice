@@ -253,20 +253,20 @@ def simulate_orders(file_path, best_per_code, qr_map, service_level=SERVICE_LEVE
 # ==================================================
 # PARTIE 4 : Analyse de sensibilité + Plot
 # ==================================================
-def run_sensitivity_with_methods(file_path, qr_map):
+def run_sensitivity_with_methods(file_path, best_per_code, qr_map):
     all_results = []
-    for method in ["ses","croston","sba"]:
-        best_per_code = pd.DataFrame([{"code": PRODUCT_CODE, "method": method,
-                                       "alpha": 0.2, "window_ratio": 0.7, "recalc_interval": 10}])
-        for sl in SERVICE_LEVELS:
-            df_run = simulate_orders(file_path, best_per_code, qr_map, service_level=sl)
-            if not df_run.empty:
-                summary = df_run.groupby(["code","method"]).agg(
-                    holding_pct=("stock_status", lambda s: (s=="holding").mean()*100),
-                    rupture_pct=("stock_status", lambda s: (s=="rupture").mean()*100),
-                ).reset_index()
-                summary["service_level"] = sl
-                all_results.append(summary)
+    for sl in SERVICE_LEVELS:
+        df_run = simulate_orders(file_path, best_per_code, qr_map, service_level=sl)
+        if not df_run.empty:
+            summary = df_run.groupby(["code","method"]).agg(
+                ROP_u_moy=("reorder_point_usine","mean"),
+                ROP_f_moy=("reorder_point_fournisseur","mean"),
+                holding_pct=("stock_status", lambda s: (s=="holding").mean()*100),
+                rupture_pct=("stock_status", lambda s: (s=="rupture").mean()*100),
+                Qr_star=("Qr_star","first")
+            ).reset_index()
+            summary["service_level"] = sl
+            all_results.append(summary)
     return pd.concat(all_results, ignore_index=True)
 
 def plot_tradeoff(df_summary):
@@ -275,19 +275,17 @@ def plot_tradeoff(df_summary):
         return
     
     plt.figure(figsize=(8,6))
-    colors = {"ses":"blue", "croston":"green", "sba":"red"}
+    methods = df_summary["method"].unique()
+    markers = {"ses":"o", "croston":"s", "sba":"^"}
     
-    for method, subset in df_summary.groupby("method"):
-        # sort by SL so lines connect in order
-        subset = subset.sort_values("service_level")
-        distances = np.sqrt(subset["holding_pct"]**2 + subset["rupture_pct"]**2)
-        norm = (distances - distances.min()) / (distances.max() - distances.min() + 1e-9)
-        alphas = 1 - norm  # closer to origin -> darker
-        
-        plt.plot(subset["holding_pct"], subset["rupture_pct"],
-                 color=colors[method], alpha=0.6, label=method)
+    for method in methods:
+        subset = df_summary[df_summary["method"] == method]
         plt.scatter(subset["holding_pct"], subset["rupture_pct"],
-                    color=colors[method], s=60, alpha=alphas)
+                    label=method, marker=markers.get(method,"o"))
+        for _, row in subset.iterrows():
+            plt.annotate(f"{row['code']} (SL={row['service_level']})",
+                         (row["holding_pct"], row["rupture_pct"]),
+                         fontsize=8, alpha=0.7)
     
     plt.xlabel("Holding %")
     plt.ylabel("Rupture %")
@@ -326,7 +324,7 @@ if uploaded_file is not None:
 
         with tab4:
             st.subheader("Analyse de sensibilité")
-            sensitivity_summary = run_sensitivity_with_methods(uploaded_file, qr_map)
+            sensitivity_summary = run_sensitivity_with_methods(uploaded_file, best_per_code, qr_map)
             st.dataframe(sensitivity_summary.head(50))
             plot_tradeoff(sensitivity_summary)
 else:
