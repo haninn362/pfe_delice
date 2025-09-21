@@ -1,5 +1,4 @@
-see this code 
-"# ==================================================
+# ==================================================
 # APPLICATION STREAMLIT - PFE HANIN
 # Base Stock + Prévisions (SES / Croston / SBA)
 # Sélection meilleure méthode + Simulation commandes
@@ -330,4 +329,4 @@ if uploaded_file is not None:
             plot_tradeoff(sensitivity_summary)
 else:
     st.info("📥 Veuillez charger un fichier Excel pour commencer.")
-"
+
