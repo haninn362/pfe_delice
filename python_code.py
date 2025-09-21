@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import nbinom
 import streamlit as st
+import matplotlib.pyplot as plt
 
 # ---------- PARAMÈTRES ----------
 st.set_page_config(page_title="PFE HANIN - Base Stock", layout="wide")
@@ -244,12 +245,13 @@ def simulate_orders(file_path, best_per_code, qr_map, service_level=SERVICE_LEVE
                     "stock_after_interval": stock_after_interval, "order_policy": order_policy,
                     "Qr_star": qr_map[code], "reorder_point_usine": ROP_u,
                     "reorder_point_fournisseur": ROP_f, "stock_status": stock_status,
-                    "service_level": service_level
+                    "service_level": service_level,
+                    "method": method
                 })
     return pd.DataFrame(results)
 
 # ==================================================
-# PARTIE 4 : Analyse de sensibilité
+# PARTIE 4 : Analyse de sensibilité + Plot
 # ==================================================
 def run_sensitivity_with_methods(file_path, best_per_code, qr_map):
     all_results = []
@@ -267,8 +269,6 @@ def run_sensitivity_with_methods(file_path, best_per_code, qr_map):
             all_results.append(summary)
     return pd.concat(all_results, ignore_index=True)
 
-import matplotlib.pyplot as plt
-
 def plot_tradeoff(df_summary):
     if df_summary.empty:
         st.warning("Pas de résultats pour tracer la sensibilité.")
@@ -276,13 +276,12 @@ def plot_tradeoff(df_summary):
     
     plt.figure(figsize=(8,6))
     methods = df_summary["method"].unique()
-    markers = {"ses":"o", "croston":"s", "sba":"^"}  # shapes for methods
+    markers = {"ses":"o", "croston":"s", "sba":"^"}
     
     for method in methods:
         subset = df_summary[df_summary["method"] == method]
         plt.scatter(subset["holding_pct"], subset["rupture_pct"],
                     label=method, marker=markers.get(method,"o"))
-        # Annotate points with product + SL
         for _, row in subset.iterrows():
             plt.annotate(f"{row['code']} (SL={row['service_level']})",
                          (row["holding_pct"], row["rupture_pct"]),
@@ -293,7 +292,6 @@ def plot_tradeoff(df_summary):
     plt.title("Trade-off Holding vs Rupture (%) – All Methods & SL")
     plt.legend()
     st.pyplot(plt)
-
 
 # ==================================================
 # MAIN STREAMLIT
