@@ -251,22 +251,49 @@ def simulate_orders(file_path, best_per_code, qr_map, service_level=SERVICE_LEVE
 # ==================================================
 # PARTIE 4 : Analyse de sensibilité
 # ==================================================
-def run_sensitivity(file_path, best_per_code, qr_map):
+def run_sensitivity_with_methods(file_path, best_per_code, qr_map):
     all_results = []
     for sl in SERVICE_LEVELS:
         df_run = simulate_orders(file_path, best_per_code, qr_map, service_level=sl)
         if not df_run.empty:
-            summary = df_run.groupby("code").agg(
+            summary = df_run.groupby(["code","method"]).agg(
                 ROP_u_moy=("reorder_point_usine","mean"),
                 ROP_f_moy=("reorder_point_fournisseur","mean"),
                 holding_pct=("stock_status", lambda s: (s=="holding").mean()*100),
                 rupture_pct=("stock_status", lambda s: (s=="rupture").mean()*100),
                 Qr_star=("Qr_star","first")
             ).reset_index()
-            st.write(f"### Résumé pour SL={sl:.2f}")
-            st.dataframe(summary)
-            all_results.append(df_run)
+            summary["service_level"] = sl
+            all_results.append(summary)
     return pd.concat(all_results, ignore_index=True)
+
+import matplotlib.pyplot as plt
+
+def plot_tradeoff(df_summary):
+    if df_summary.empty:
+        st.warning("Pas de résultats pour tracer la sensibilité.")
+        return
+    
+    plt.figure(figsize=(8,6))
+    methods = df_summary["method"].unique()
+    markers = {"ses":"o", "croston":"s", "sba":"^"}  # shapes for methods
+    
+    for method in methods:
+        subset = df_summary[df_summary["method"] == method]
+        plt.scatter(subset["holding_pct"], subset["rupture_pct"],
+                    label=method, marker=markers.get(method,"o"))
+        # Annotate points with product + SL
+        for _, row in subset.iterrows():
+            plt.annotate(f"{row['code']} (SL={row['service_level']})",
+                         (row["holding_pct"], row["rupture_pct"]),
+                         fontsize=8, alpha=0.7)
+    
+    plt.xlabel("Holding %")
+    plt.ylabel("Rupture %")
+    plt.title("Trade-off Holding vs Rupture (%) – All Methods & SL")
+    plt.legend()
+    st.pyplot(plt)
+
 
 # ==================================================
 # MAIN STREAMLIT
@@ -299,7 +326,8 @@ if uploaded_file is not None:
 
         with tab4:
             st.subheader("Analyse de sensibilité")
-            sensitivity_results = run_sensitivity(uploaded_file, best_per_code, qr_map)
-            st.dataframe(sensitivity_results.head(50))
+            sensitivity_summary = run_sensitivity_with_methods(uploaded_file, best_per_code, qr_map)
+            st.dataframe(sensitivity_summary.head(50))
+            plot_tradeoff(sensitivity_summary)
 else:
     st.info("📥 Veuillez charger un fichier Excel pour commencer.")
